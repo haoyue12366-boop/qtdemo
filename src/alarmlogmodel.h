@@ -32,10 +32,10 @@ public:
 
 public slots:
     void updateFromAlarmStatus(quint16 alarmStatus, float temperature, float pressure, float level, float flow);
+    void acknowledgeByAlarmStatus(quint16 alarmStatusMask);
 
 private:
     void generateInitialData();
-    void setAcknowledged(bool acknowledged);
 
     QList<AlarmRecord> m_records;
     quint16 m_lastAlarmStatus = 0;

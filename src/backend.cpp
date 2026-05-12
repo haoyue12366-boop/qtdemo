@@ -1,34 +1,78 @@
 #include "backend.h"
 
+#include "alarmevaluator.h"
 #include "logger.h"
 
 #include <QDateTime>
 #include <QMetaObject>
 #include <utility>
 
+namespace {
+QString alarmNameForBit(quint16 bit)
+{
+    switch (bit) {
+    case AlarmEvaluator::TemperatureHigh:
+        return QStringLiteral("温度高");
+    case AlarmEvaluator::PressureHigh:
+        return QStringLiteral("压力高");
+    case AlarmEvaluator::FlowHigh:
+        return QStringLiteral("流量高");
+    case AlarmEvaluator::LevelLow:
+        return QStringLiteral("液位低");
+    default:
+        return QStringLiteral("未知报警");
+    }
+}
+
+QString alarmValueForBit(quint16 bit, float temperature, float pressure, float level, float flow)
+{
+    switch (bit) {
+    case AlarmEvaluator::TemperatureHigh:
+        return QStringLiteral("%1 C").arg(QString::number(temperature, 'f', 1));
+    case AlarmEvaluator::PressureHigh:
+        return QStringLiteral("%1 MPa").arg(QString::number(pressure, 'f', 2));
+    case AlarmEvaluator::FlowHigh:
+        return QStringLiteral("%1 m3/h").arg(QString::number(flow, 'f', 1));
+    case AlarmEvaluator::LevelLow:
+        return QStringLiteral("%1 m").arg(QString::number(level, 'f', 2));
+    default:
+        return QStringLiteral("-");
+    }
+}
+}
+
 Backend::Backend(const QString &applicationDir, QObject *parent)
     : QObject(parent)
     , m_configManager(applicationDir, this)
     , m_config(m_configManager.load())
     , m_alarmModel(this)
+    , m_alarmHistoryModel(this)
     , m_serialWorker(new SerialPortWorker)
     , m_databaseWorker(new DatabaseWorker)
     , m_startedAt(QDateTime::currentDateTime())
 {
     qRegisterMetaType<AppConfig>("AppConfig");
-    qRegisterMetaType<TelemetryRecord>("TelemetryRecord");
+    qRegisterMetaType<AlarmRecordData>("AlarmRecordData");
     qRegisterMetaType<CommunicationStats>("CommunicationStats");
+    qRegisterMetaType<AlarmHistoryQueryOptions>("AlarmHistoryQueryOptions");
+    qRegisterMetaType<AlarmHistoryRow>("AlarmHistoryRow");
+    qRegisterMetaType<QList<AlarmHistoryRow>>("QList<AlarmHistoryRow>");
+    qRegisterMetaType<AlarmStatsOptions>("AlarmStatsOptions");
+    qRegisterMetaType<AlarmStatsResult>("AlarmStatsResult");
     qRegisterMetaType<quint16>("quint16");
 
     m_statusText = QStringLiteral("系统就绪");
     m_recentError = QStringLiteral("无");
     m_uptimeText = QStringLiteral("00:00:00");
+    m_backgroundTaskMessage = QStringLiteral("后台任务就绪");
+    m_alarmHistoryMessage = QStringLiteral("尚未查询历史报警");
 
     connect(&m_uptimeTimer, &QTimer::timeout,
             this, &Backend::updateUptime,
             Qt::QueuedConnection);
     m_uptimeTimer.start(1000);
 
+    initializeBackgroundTasks(applicationDir);
     startWorkers(applicationDir);
 }
 
@@ -46,11 +90,9 @@ void Backend::startWorkers(const QString &applicationDir)
     m_databaseWorker->moveToThread(&m_dbThread);
 
     connect(&m_serialThread, &QThread::finished,
-            m_serialWorker, &QObject::deleteLater,
-            Qt::DirectConnection);
+            m_serialWorker, &QObject::deleteLater);
     connect(&m_dbThread, &QThread::finished,
-            m_databaseWorker, &QObject::deleteLater,
-            Qt::DirectConnection);
+            m_databaseWorker, &QObject::deleteLater);
 
     connect(this, &Backend::requestApplyConfig,
             m_serialWorker, &SerialPortWorker::applyConfig,
@@ -64,8 +106,8 @@ void Backend::startWorkers(const QString &applicationDir)
     connect(this, &Backend::requestAcknowledgeAlarm,
             m_serialWorker, &SerialPortWorker::acknowledgeAlarm,
             Qt::QueuedConnection);
-    connect(this, &Backend::requestInsertTelemetry,
-            m_databaseWorker, &DatabaseWorker::insertTelemetry,
+    connect(this, &Backend::requestInsertAlarmRecord,
+            m_databaseWorker, &DatabaseWorker::insertAlarmRecord,
             Qt::QueuedConnection);
 
     connect(m_serialWorker, &SerialPortWorker::telemetryUpdated,
@@ -237,11 +279,21 @@ void Backend::disconnectFromDevice()
 
 void Backend::acknowledgeAlarm()
 {
+    if (m_currentAlarmStatus == 0) {
+        setStatus(QStringLiteral("当前无未确认报警"), false);
+        return;
+    }
+    m_alarmModel.acknowledgeByAlarmStatus(m_currentAlarmStatus);
     emit requestAcknowledgeAlarm();
+    setStatus(QStringLiteral("已发送报警确认命令"), false);
 }
 
 void Backend::shutdown()
 {
+    if (m_stopping) {
+        return;
+    }
+    m_stopping = true;
     stopWorkers();
 }
 
@@ -251,17 +303,11 @@ void Backend::handleTelemetry(float temperature, float pressure, float level, fl
     m_pressure = pressure;
     m_level = level;
     m_flow = flow;
+    m_currentAlarmStatus = alarmStatus;
 
     pushTemperature(temperature);
     m_alarmModel.updateFromAlarmStatus(alarmStatus, temperature, pressure, level, flow);
-
-    TelemetryRecord record;
-    record.temperature = temperature;
-    record.pressure = pressure;
-    record.level = level;
-    record.flow = flow;
-    record.alarmStatus = alarmStatus;
-    emit requestInsertTelemetry(record);
+    pushAlarmRecordsForStorage(alarmStatus, temperature, pressure, level, flow);
 
     emit telemetryChanged();
     setStatus(QStringLiteral("采集正常: T=%1 C, P=%2 MPa, L=%3 m, F=%4 m3/h")
@@ -361,6 +407,41 @@ void Backend::pushTemperature(float value)
         m_temperatureAvg = sum / m_temperatureData.size();
     }
     emit temperatureDataChanged();
+}
+
+void Backend::pushAlarmRecordsForStorage(quint16 alarmStatus, float temperature, float pressure, float level, float flow)
+{
+    const quint16 newBits = alarmStatus & static_cast<quint16>(~m_lastAlarmStatusForStorage);
+    if (newBits == 0) {
+        m_lastAlarmStatusForStorage = alarmStatus;
+        return;
+    }
+
+    const QString timestampText = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
+    for (quint16 bit : {quint16(AlarmEvaluator::TemperatureHigh),
+                        quint16(AlarmEvaluator::PressureHigh),
+                        quint16(AlarmEvaluator::FlowHigh),
+                        quint16(AlarmEvaluator::LevelLow)}) {
+        if ((newBits & bit) == 0) {
+            continue;
+        }
+
+        AlarmRecordData record;
+        record.timestampText = timestampText;
+        record.variableName = alarmNameForBit(bit);
+        record.valueText = alarmValueForBit(bit, temperature, pressure, level, flow);
+        record.statusText = QStringLiteral("激活");
+        record.acknowledged = false;
+        record.alarmBit = bit;
+        record.alarmStatus = alarmStatus;
+        record.temperature = temperature;
+        record.pressure = pressure;
+        record.level = level;
+        record.flow = flow;
+        emit requestInsertAlarmRecord(record);
+    }
+
+    m_lastAlarmStatusForStorage = alarmStatus;
 }
 
 AppConfig Backend::normalizedConfig() const
