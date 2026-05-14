@@ -21,7 +21,7 @@ struct AppConfig
     bool simulationMode = true;
 };
 
-Q_DECLARE_METATYPE(AppConfig)
+Q_DECLARE_METATYPE(AppConfig)//把 AppConfig 声明成 Qt 元对象系统认识的元类型,然后使用在backend.cpp使用qRegisterMetaType注册进元对象
 
 /**
  * @brief QSettings 配置管理器。

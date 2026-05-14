@@ -71,7 +71,7 @@ void Logger::bytes(const QString &prefix, const QByteArray &payload)
 
 void Logger::write(const QString &level, const QString &message)
 {
-    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
     const QString threadId = QStringLiteral("0x%1")
                                  .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16);
     const QString line = QStringLiteral("[%1] [%2] [Thread %3] %4")

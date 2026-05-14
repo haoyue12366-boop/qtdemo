@@ -21,10 +21,10 @@ public:
     explicit SerialPortWorker(QObject *parent = nullptr);
 
 public slots:
-    void init();
+    void init();//在 worker 所在线程里创建 QSerialPort、轮询 QTimer、响应超时 QTimer
     void shutdown();
     void applyConfig(const AppConfig &config);
-    void connectToDevice();
+    void connectToDevice();//调 openWithCurrentConfig()，决定是真实串口还是仿真模式
     void disconnectFromDevice();
     void acknowledgeAlarm();
 
@@ -35,14 +35,15 @@ signals:
     void communicationStatsUpdated(const CommunicationStats &stats);
 
 private slots:
-    void pollOnce();
+    void pollOnce();//发送读请求。若存在未完成事务，则不继续发
     void handleResponseTimeout();
     void readReadyBytes();
 
 private:
     void stopInternal();
     void openWithCurrentConfig();
-    void sendRequest(const QByteArray &request);
+    bool validateConfig(QString *errorMessage) const;
+    void sendRequest(const QByteArray &request);//发出请求后记录 m_pendingRequest，并启动 m_responseTimer 等待响应
     void processSimulatedFrame(const QByteArray &request);
     void finishSuccessfulTransaction(const ModbusProtocol::ProcessResult &result);
     void emitStats();

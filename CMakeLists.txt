@@ -12,6 +12,7 @@ find_package(Qt6 6.10 REQUIRED COMPONENTS
     Qml
     Quick
     QuickControls2
+    QuickDialogs2
     SerialPort
     Sql
     Concurrent
@@ -30,16 +31,30 @@ qt_add_executable(qthmi
     src/alarmevaluator.h
     src/alarmevaluator.cpp
     src/communicationstats.h
+    src/backgroundtasktypes.h
+    src/backgroundtaskmanager.h
+    src/backgroundtaskmanager.cpp
+    src/tasks/tasksqlconnection.h
+    src/tasks/alarmcsvexporttask.h
+    src/tasks/alarmcsvexporttask.cpp
+    src/tasks/alarmhistoryquerytask.h
+    src/tasks/alarmhistoryquerytask.cpp
+    src/tasks/alarmstatstask.h
+    src/tasks/alarmstatstask.cpp
     src/serialportworker.h
     src/serialportworker.cpp
     src/alarmrecord.h
+    src/alarmrecorddata.h
     src/telemetryrecord.h
+    src/alarmhistorymodel.h
+    src/alarmhistorymodel.cpp
     src/alarmlogmodel.h
     src/alarmlogmodel.cpp
     src/databaseworker.h
     src/databaseworker.cpp
     src/backend.h
     src/backend.cpp
+    src/backend_backgroundtasks.cpp
     src/curveplotprovider.h
     src/curveplotprovider.cpp
 )
@@ -48,6 +63,11 @@ qt_add_qml_module(qthmi
     URI Qthmi
     VERSION 1.0
     QML_FILES
+        qml/ConfigPanel.qml
+        qml/TrendPanel.qml
+        qml/CommunicationStatsPanel.qml
+        qml/AlarmPanel.qml
+        qml/TelemetrySummaryPanel.qml
         qml/Main.qml
 )
 
@@ -57,9 +77,14 @@ target_link_libraries(qthmi PRIVATE
     Qt6::Qml
     Qt6::Quick
     Qt6::QuickControls2
+    Qt6::QuickDialogs2
     Qt6::SerialPort
     Qt6::Sql
     Qt6::Concurrent
+)
+
+target_include_directories(qthmi PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 if(MSVC)

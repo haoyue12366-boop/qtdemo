@@ -15,7 +15,7 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
     Logger::initialize(QCoreApplication::applicationDirPath());
-    Logger::installQtMessageHandler();
+    Logger::installQtMessageHandler();//qt信息处理器，将信息重定向到日志
     Logger::info(QStringLiteral("qthmi 启动"));
 
     qmlRegisterType<CurvePlotProvider>("Industrial", 1, 0, "CurvePlotProvider");

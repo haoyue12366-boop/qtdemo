@@ -16,5 +16,7 @@ struct AlarmRecord
     QString valueText;
     QString statusText;
     QColor statusColor;
+    QColor foregroundColor;
     bool acknowledged = false;
+    quint16 alarmBit = 0;
 };

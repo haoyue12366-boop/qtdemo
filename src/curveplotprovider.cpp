@@ -7,7 +7,8 @@
 CurvePlotProvider::CurvePlotProvider(QQuickItem *parent)
     : QQuickItem(parent)
 {
-    setFlag(QQuickItem::ItemHasContents, true);
+    setFlag(QQuickItem::ItemHasContents, true);//告诉 Qt Quick：这个 Item 不是纯逻辑节点，它要参与渲染，系统要在合适时机调用 updatePaintNode()
+    //继承 QQuickItem，本质上是为了：既保留 QML Item 的布局/绑定能力，又直接进入 Scene Graph 的底层渲染路径。
     m_updateTimer.setInterval(33);
     m_updateTimer.setTimerType(Qt::CoarseTimer);
     connect(&m_updateTimer, &QTimer::timeout,
@@ -72,9 +73,9 @@ QSGNode *CurvePlotProvider::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeDat
     if (node == nullptr) {
         node = new QSGGeometryNode;
         QSGGeometry *geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), pointCount);
-        geometry->setDrawingMode(QSGGeometry::DrawLineStrip);
-        geometry->setLineWidth(2.0f);
-        geometry->setVertexDataPattern(QSGGeometry::StreamPattern);
+        geometry->setDrawingMode(QSGGeometry::DrawLineStrip);//按点序列连续连线
+        geometry->setLineWidth(2.0f);//线宽想要 2 像素级别
+        geometry->setVertexDataPattern(QSGGeometry::StreamPattern);//告诉底层：这批顶点数据会经常改
         node->setGeometry(geometry);
         node->setFlag(QSGNode::OwnsGeometry);
 

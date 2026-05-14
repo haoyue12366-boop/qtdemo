@@ -15,6 +15,11 @@ QColor statusColor(bool acknowledged)
     return acknowledged ? QColor(QStringLiteral("#1f8a4c")) : QColor(QStringLiteral("#b3261e"));
 }
 
+QColor foregroundColor(bool acknowledged)
+{
+    return acknowledged ? QColor(QStringLiteral("#d7efe1")) : QColor(QStringLiteral("#fff1f1"));
+}
+
 QString alarmName(quint16 bit)
 {
     switch (bit) {
@@ -74,6 +79,9 @@ QVariant AlarmLogModel::data(const QModelIndex &index, int role) const
     if (role == Qt::BackgroundRole && index.column() == 3) {
         return record.statusColor;
     }
+    if (role == Qt::ForegroundRole) {
+        return record.foregroundColor;
+    }
 
     if (role == Qt::DisplayRole) {
         switch (index.column()) {
@@ -104,7 +112,7 @@ QVariant AlarmLogModel::data(const QModelIndex &index, int role) const
     }
 }
 
-QVariant AlarmLogModel::headerData(int section, Qt::Orientation orientation, int role) const
+QVariant AlarmLogModel::headerData(int section, Qt::Orientation orientation, int role) const//必须重写这个表头函数
 {
     if (orientation != Qt::Horizontal || role != Qt::DisplayRole) {
         return {};
@@ -132,18 +140,13 @@ QHash<int, QByteArray> AlarmLogModel::roleNames() const
         {AlarmValueRole, "alarmValue"},
         {StatusTextRole, "statusText"},
         {Qt::BackgroundRole, "statusColor"},
+        {Qt::ForegroundRole, "foregroundColor"},
     };
 }
 
 void AlarmLogModel::updateFromAlarmStatus(quint16 alarmStatus, float temperature, float pressure, float level, float flow)
 {
     if (alarmStatus == m_lastAlarmStatus) {
-        return;
-    }
-
-    if (alarmStatus == 0x0000) {
-        setAcknowledged(true);
-        m_lastAlarmStatus = alarmStatus;
         return;
     }
 
@@ -159,10 +162,12 @@ void AlarmLogModel::updateFromAlarmStatus(quint16 alarmStatus, float temperature
         record.acknowledged = false;
         record.statusText = statusText(false);
         record.statusColor = statusColor(false);
+        record.foregroundColor = foregroundColor(false);
+        record.alarmBit = bit;
 
-        beginInsertRows(QModelIndex(), 0, 0);
-        m_records.prepend(record);
-        endInsertRows();
+        beginInsertRows(QModelIndex(), 0, 0);//告诉视图：我要在第 0 行插入 1 条
+        m_records.prepend(record);//记录差入容器头部
+        endInsertRows();//插入结束
 
         if (m_records.size() > 50000) {
             const int lastRow = m_records.size() - 1;
@@ -173,6 +178,36 @@ void AlarmLogModel::updateFromAlarmStatus(quint16 alarmStatus, float temperature
     }
 
     m_lastAlarmStatus = alarmStatus;
+}
+
+void AlarmLogModel::acknowledgeByAlarmStatus(quint16 alarmStatusMask)//根据某个报警位掩码，把表里对应的未确认报警批量改成已确认，并通过 dataChanged 通知视图局部刷新。
+{
+    if (alarmStatusMask == 0 || m_records.isEmpty()) {
+        return;
+    }
+
+    int firstChangedRow = -1;
+    int lastChangedRow = -1;
+    for (int row = 0; row < m_records.size(); ++row) {
+        AlarmRecord &record = m_records[row];
+        if (record.acknowledged || record.alarmBit == 0 || (record.alarmBit & alarmStatusMask) == 0) {
+            continue;
+        }
+
+        record.acknowledged = true;
+        record.statusText = statusText(true);
+        record.statusColor = statusColor(true);
+        record.foregroundColor = foregroundColor(true);
+
+        if (firstChangedRow < 0) {
+            firstChangedRow = row;
+        }
+        lastChangedRow = row;
+    }
+
+    if (firstChangedRow >= 0) {
+        emit dataChanged(index(firstChangedRow, 0), index(lastChangedRow, ColumnCount - 1));
+    }
 }
 
 void AlarmLogModel::generateInitialData()
@@ -197,22 +232,8 @@ void AlarmLogModel::generateInitialData()
         record.acknowledged = acknowledged;
         record.statusText = statusText(acknowledged);
         record.statusColor = statusColor(acknowledged);
+        record.foregroundColor = foregroundColor(acknowledged);
         m_records.append(record);
     }
     endResetModel();
-}
-
-void AlarmLogModel::setAcknowledged(bool acknowledged)
-{
-    if (m_records.isEmpty()) {
-        return;
-    }
-    const int updateCount = qMin(100, m_records.size());
-    for (int row = 0; row < updateCount; ++row) {
-        AlarmRecord &record = m_records[row];
-        record.acknowledged = acknowledged;
-        record.statusText = statusText(acknowledged);
-        record.statusColor = statusColor(acknowledged);
-    }
-    emit dataChanged(index(0, 0), index(updateCount - 1, ColumnCount - 1));
 }

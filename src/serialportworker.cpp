@@ -31,7 +31,7 @@ void SerialPortWorker::applyConfig(const AppConfig &config)
     emitStats();
 }
 
-void SerialPortWorker::init()
+void SerialPortWorker::init()//创建子线程才初始化，不经过构造函数
 {
     Logger::info(QStringLiteral("通信子线程 ID: 0x%1")
                      .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16));
@@ -79,6 +79,13 @@ void SerialPortWorker::connectToDevice()
 
 void SerialPortWorker::openWithCurrentConfig()
 {
+    QString errorMessage;
+    if (!validateConfig(&errorMessage)) {
+        Logger::error(errorMessage);
+        emit statusMessage(errorMessage, true);
+        return;
+    }
+
     m_serial->setPortName(m_config.portName);
     m_serial->setBaudRate(m_config.baudRate);
     m_serial->setDataBits(toDataBits(m_config.dataBits));
@@ -123,12 +130,19 @@ void SerialPortWorker::acknowledgeAlarm()
         emit statusMessage(QStringLiteral("请先连接设备"), true);
         return;
     }
+    if (m_usingRealSerial && !m_pendingRequest.isEmpty()) {
+        emit statusMessage(QStringLiteral("当前有未完成通信，请稍后再确认报警"), true);
+        return;
+    }
     sendRequest(m_protocol.buildWriteSingleRequest(8, 0xFF00));
 }
 
 void SerialPortWorker::pollOnce()
 {
     if (!m_connected) {
+        return;
+    }
+    if (m_usingRealSerial && !m_pendingRequest.isEmpty()) {
         return;
     }
     sendRequest(m_protocol.buildReadRequest(0, 9));
@@ -176,8 +190,16 @@ void SerialPortWorker::readReadyBytes()
     const bool crcOk = ModbusProtocol::verifyCrc(frame);
     logFrame(QStringLiteral("RX(real)"), frame, crcOk);
     if (!crcOk) {
+        if (m_responseTimer != nullptr) {
+            m_responseTimer->stop();
+        }
         ++m_stats.crcErrorCount;
+        m_pendingRequest.clear();
+        m_retryIndex = 0;
+        Logger::error(QStringLiteral("响应 CRC 校验失败，原始字节=%1")
+                          .arg(QString::fromLatin1(frame.toHex(' ').toUpper())));
         emitStats();
+        emit statusMessage(QStringLiteral("响应 CRC 校验失败"), true);
         return;
     }
     if (m_responseTimer != nullptr) {
@@ -225,8 +247,21 @@ void SerialPortWorker::sendRequest(const QByteArray &request)
     ++m_stats.txCount;
     if (m_usingRealSerial && m_serial != nullptr && m_serial->isOpen()) {
         const qint64 written = m_serial->write(request);
+        if (written < 0) {
+            ++m_stats.exceptionCount;
+            const QString message = QStringLiteral("串口写入失败: %1").arg(m_serial->errorString());
+            Logger::error(message);
+            emitStats();
+            emit statusMessage(message, true);
+            return;
+        }
         if (written != request.size()) {
-            Logger::warning(QStringLiteral("串口写入字节数不完整: %1/%2").arg(written).arg(request.size()));
+            ++m_stats.exceptionCount;
+            const QString message = QStringLiteral("串口写入字节数异常: %1/%2").arg(written).arg(request.size());
+            Logger::error(message);
+            emitStats();
+            emit statusMessage(message, true);
+            return;
         }
         m_pendingRequest = request;
         if (m_responseTimer != nullptr) {
@@ -284,6 +319,49 @@ void SerialPortWorker::logFrame(const QString &direction, const QByteArray &fram
                       .arg(function, 2, 16, QLatin1Char('0'))
                       .arg(crcOk ? QStringLiteral("OK") : QStringLiteral("BAD")),
                   frame);
+}
+
+bool SerialPortWorker::validateConfig(QString *errorMessage) const
+{
+    if (m_config.portName.trimmed().isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("串口参数非法：端口号不能为空");
+        }
+        return false;
+    }
+    if (m_config.slaveId < 1 || m_config.slaveId > 247) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("串口参数非法：从机地址必须在 1 到 247 之间");
+        }
+        return false;
+    }
+    if (m_config.dataBits < 5 || m_config.dataBits > 8) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("串口参数非法：数据位仅支持 5/6/7/8");
+        }
+        return false;
+    }
+    if (m_config.stopBits != 1 && m_config.stopBits != 2) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("串口参数非法：停止位仅支持 1 或 2");
+        }
+        return false;
+    }
+    if (m_config.parity != QStringLiteral("None")
+        && m_config.parity != QStringLiteral("Even")
+        && m_config.parity != QStringLiteral("Odd")) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("串口参数非法：校验位仅支持 None/Even/Odd");
+        }
+        return false;
+    }
+    if (m_config.refreshInterval <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("串口参数非法：刷新周期必须大于 0");
+        }
+        return false;
+    }
+    return true;
 }
 
 QSerialPort::DataBits SerialPortWorker::toDataBits(int value) const

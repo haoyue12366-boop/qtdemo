@@ -163,7 +163,7 @@ ModbusProtocol::ProcessResult ModbusProtocol::processRequest(const QByteArray &r
     return result;
 }
 
-ModbusProtocol::ProcessResult ModbusProtocol::processResponse(const QByteArray &response) const
+ModbusProtocol::ProcessResult ModbusProtocol::processResponse(const QByteArray &response) const//当前固定读0-8
 {
     ProcessResult result;
     if (response.size() < 5) {
